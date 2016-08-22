@@ -1,0 +1,478 @@
+#include "include/template.h"
+/*
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+//#include <conio.h>
+#include <time.h>
+#include <string.h>
+//#include <iostream.h>
+ */
+#include "cir.h"
+//#include <omp.h>
+FILE *slu;
+FILE *pro;
+FILE *var;
+//*****************************end of cir()******************************
+//This program is based on the 
+const int DIM = 7;
+const int NP = 50;
+//const int GENERATION = 32000;
+//int GENERATION=5;
+const int FES = 15000;
+const int GENERATION=FES/NP;
+//const int FES = 250;
+const int TIMES = 30;
+#define NUM_THREADS 4    
+const double pi=acos(-1);
+//////////////////////////////////////////////
+/*
+   const char* all_filename = "DE.txt";
+   char fname[320];	
+   char inputfile[320];
+   char out_file[320];
+   char solu_filename[320];
+ */
+
+double best_value;
+double F,CR;
+struct Solution{
+	double x[DIM];
+	double fitness;
+	double u[DIM];
+	int succ;
+};
+Solution solution[NP];
+double LOW_BOUND[DIM],HIGH_BOUND[DIM];
+int gen;
+int fes;
+int gbest_index;
+int    stop_cnt;
+
+bool flag;
+//double gen_fit[FES+13200];
+
+double fes_fit[FES+13200];//accumulate among all runs.
+double single_time_fit[FES+13200];
+double solu[TIMES];
+int	   step[TIMES];
+int    stop[TIMES];
+int    stop_fes;
+double errTime[TIMES];
+double finishTime[TIMES];
+clock_t start_time, finish_time;
+////////////////////////////////////////
+//Func Name : random
+//Function  : return a random between the given low and higb bound
+//Param     : (double) low  and (double) high
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : Oct.23 2006
+inline double random(double low, double high)
+{
+	return low + (high-low)*rand()*1.0/RAND_MAX;
+	//return ((double)(rand()%1000)/1000.0)*(high - low) + low;
+}
+inline int random_int(int low, int high)
+{
+	if(high>low)
+		return low + rand()%(high-low+1);
+	else
+		return low;
+}
+//generate a random value according to the gaussian distribution with expect=U, deviation=del
+double gaussian(double U,double del)
+{
+	double u1,u2,x;
+	do{u1=random(0,1);}while(u1==0||u1==1);
+	//do{u1=random(0,1);}while(u1==0||u1==1);
+	u2=random(0,1);
+	x=sqrt(-2.0*log(u1))*cos(2.0*pi*u2);
+	return del*x+U;
+}
+/*generate a random number according to the predefine cauchy distribution with t=1 */
+double cauchy() {
+	double ran=rand()/(double)RAND_MAX;
+	return tan((ran-0.5)*pi);
+}
+////////////////////////////////////////////////////////
+double repair(double value, double low, double high)
+{
+	/*start:;
+	  if(value>=low&&value<=high) return value;
+	  double r=random(0,1); double p=0.5;
+	  while(value<low){
+	  if(r<=p) value=random(low,high);
+	  else value = 2*low-value;
+	  }
+	  while(value>high){
+	  if(r<=p) value=random(low,high);
+	  else value = 2*high - value;
+	  }
+	  goto start;*/
+	/*	//这个的效果非常差
+		if(value<low) return low;
+		else if(value>high) return high;
+		else return value;*/
+	//这个的效果不够start的那个好
+	if(value>=low&&value<=high) return value;
+	else return random(low,high);
+}
+double repair_pos(double value, double low, double high)
+{
+	/*start:;
+	  if(value>=low&&value<=high) return value;
+	  double r=random(0,1); double p=0.5;
+	  while(value<low){
+	  if(r<=p) value=low;
+	  else value = 2*low-value;
+	  }
+	  while(value>high){
+	  if(r<=p) value=high;
+	  else value = 2*high - value;
+	  }
+	  goto start;*/
+	if(value<low) return low;
+	else if(value>high) return high;
+	else return value;
+	//以上各种修补方法性能差不多
+	//	if(value>=low&&value<=high) return value;
+	//	else return random(low,high);
+}
+//Func name : cal_fitness
+//Function  : calculate the fitness value of one individual at present pos
+//Parameter : (int) particle_index indicates the index of individual that to be calculated
+//Remind    : you should modify the code of this function base on the problem you want to solve
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : Oct 2006
+inline double cal_fitness(double pos[],int dim)
+{
+	double res=_objective(pos);
+	fes_fit[fes]+=best_value;
+	single_time_fit[fes]=best_value;
+	fes++;
+	return res;
+}
+//Function name: readfile
+//Parameters: None
+//Function: read in the range of each dimension
+//return: None
+//Autor     : Apollo (Zhihui Zhan)
+//Date: 2007-05-27
+void readfile()
+{
+	int i;
+	FILE* in;
+	if((in = freopen("data.txt", "r", stdin))==NULL){
+		printf("Could not open file(data.txt) for reading data! Program terminates!");
+		exit(1);
+	}
+	//read in the low and high bound from the file
+	for(i=0;i<DIM;i++){
+		scanf("%lf%lf",&LOW_BOUND[i],&HIGH_BOUND[i]);
+	}
+	fclose(in);
+}
+//Func Name : init
+//Function  : Initialization of DE
+//Param     : None
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+void init()
+{
+	int i,j,id;
+	double value;
+	F=0.5;
+	CR=0.9;
+	gbest_index = 0;
+	//int NUM_THREADS=4;
+	//	omp_set_num_threads(NUM_THREADS);
+	//#pragma omp parallel for
+	for(i=0;i<NP;i++){
+		for(j=0;j<DIM;j++)
+			solution[i].x[j] = random(LOW_BOUND[j],HIGH_BOUND[j]);
+	}
+	//#pragma omp parallel //for private(value)
+	for(i=0;i<NP;i++)	
+	{
+		//id = omp_get_thread_num(); 
+		//for (i=id;i< NP;i=i+NUM_THREADS)
+		{//printf("threadid=%d\n",id);
+			//value=cal_fitness(solution[i].x,DIM);	
+			solution[i].fitness = cal_fitness(solution[i].x,DIM);
+		}
+		//printf("threadid=%d\n",omp_get_thread_num());
+	}
+	for(i=0;i<NP;i++)
+		if(solution[i].fitness>solution[gbest_index].fitness)
+			gbest_index = i;
+
+}
+//Func Name : scheme_rand_1
+//Function  : The sample scheme of DE, generate a new vector based on a random vector
+//Param     : None
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+void scheme_rand_1(int i)
+{
+	int j,k,a,b,c;
+	do{	a = random_int(0,NP-1);}while(a==i);
+	do{	b = random_int(0,NP-1);}while(b==i||b==a);
+	do{	c = random_int(0,NP-1);}while(c==i||c==a||c==b);
+	k = random_int(0,DIM-1);
+	for(j=0;j<DIM;j++){
+		if(random(0,1)<=CR||j==k){
+			solution[i].u[j] = solution[c].x[j]+F*(solution[a].x[j]-solution[b].x[j]);
+			/*if(solution[i].u[j]<LOW_BOUND[j])
+			  solution[i].u[j] = LOW_BOUND[j];
+			  if(solution[i].u[j]>HIGH_BOUND[j])
+			  solution[i].u[j] = HIGH_BOUND[j];*/
+			solution[i].u[j] = repair_pos(solution[i].u[j],LOW_BOUND[j],HIGH_BOUND[j]);
+		}else
+			solution[i].u[j] = solution[i].x[j];
+	}
+}
+//Func Name : scheme_rand_2
+//Function  : The sample scheme of DE, generate a new vector based on a random vector
+//Param     : None
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+void scheme_rand_2(int i)
+{
+	int j,k,a,b,c,d,e;
+	do{	a = random_int(0,NP-1);}while(a==i);
+	do{	b = random_int(0,NP-1);}while(b==i||b==a);
+	do{	c = random_int(0,NP-1);}while(c==i||c==a||c==b);
+	do{ d = random_int(0,NP-1);}while(d==i||d==a||d==b||d==c);
+	do{ e = random_int(0,NP-1);}while(e==i||e==a||e==b||e==c||e==d);
+	k = random_int(0,DIM-1);
+	for(j=0;j<DIM;j++){
+		if(random(0,1)<=CR||j==k){
+			solution[i].u[j] = solution[a].x[j]
+				+F*(solution[b].x[j]-solution[c].x[j])+F*(solution[d].x[j]-solution[e].x[j]);
+			/*if(solution[i].u[j]<LOW_BOUND[j])
+			  solution[i].u[j] = LOW_BOUND[j];
+			  if(solution[i].u[j]>HIGH_BOUND[j])
+			  solution[i].u[j] = HIGH_BOUND[j];*/
+			solution[i].u[j] = repair_pos(solution[i].u[j],LOW_BOUND[j],HIGH_BOUND[j]);
+		}else
+			solution[i].u[j] = solution[i].x[j];
+	}
+}
+//Func Name : scheme_best_1
+//Function  : The sample scheme of DE, generate a new vector based on the best vector
+//Param     : None
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+void scheme_best_1(int i)
+{
+	int j,k,a,b;
+	do{	a = random_int(0,NP-1);}while(a==i);
+	do{	b = random_int(0,NP-1);}while(b==i||b==a);
+	k = random_int(0,DIM-1);
+	for(j=0;j<DIM;j++){
+		if(random(0,1)<=CR||j==k){
+			solution[i].u[j] = solution[gbest_index].x[j]+F*(solution[a].x[j]-solution[b].x[j]);
+			/*if(solution[i].u[j]<LOW_BOUND[j])
+			  solution[i].u[j] = LOW_BOUND[j];
+			  if(solution[i].u[j]>HIGH_BOUND[j])
+			  solution[i].u[j] = HIGH_BOUND[j];*/
+			solution[i].u[j] = repair_pos(solution[i].u[j],LOW_BOUND[j],HIGH_BOUND[j]);
+		}else
+			solution[i].u[j] = solution[i].x[j];
+	}
+}
+//Func Name : scheme_best_2
+//Function  : The sample scheme of DE, generate a new vector based on the best vector
+//Param     : None
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+void scheme_best_2(int i)
+{
+	int j,k,a,b,c,d;
+	do{	a = random_int(0,NP-1);}while(a==i);
+	do{	b = random_int(0,NP-1);}while(b==i||b==a);
+	do{	c = random_int(0,NP-1);}while(c==i||c==a||c==b);
+	do{	d = random_int(0,NP-1);}while(d==i||d==a||d==b||d==c);
+	k = random_int(0,DIM-1);
+	for(j=0;j<DIM;j++){
+		if(random(0,1)<=CR||j==k){
+			solution[i].u[j] = solution[gbest_index].x[j]
+				+F*(solution[a].x[j]-solution[b].x[j]+solution[c].x[j]-solution[d].x[j]);
+			/*if(solution[i].u[j]<LOW_BOUND[j])
+			  solution[i].u[j] = LOW_BOUND[j];
+			  if(solution[i].u[j]>HIGH_BOUND[j])
+			  solution[i].u[j] = HIGH_BOUND[j];*/
+			solution[i].u[j] = repair_pos(solution[i].u[j],LOW_BOUND[j],HIGH_BOUND[j]);
+		}else
+			solution[i].u[j] = solution[i].x[j];
+	}
+}
+//Func Name : scheme_rand2best_1
+//Function  : The sample scheme of DE, generate a new vector based on the best vector and a random vector
+//Param     : int i, the solution index
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+void scheme_rand2best_1(int i)
+{
+	int j,k,a,b;
+	do{	a = random_int(0,NP-1);}while(a==i);
+	do{	b = random_int(0,NP-1);}while(b==i||b==a);
+	k = random_int(0,DIM-1);
+	for(j=0;j<DIM;j++){
+		if(random(0,1)<=CR||j==k){
+			solution[i].u[j] = solution[i].x[j]
+				+F*(solution[gbest_index].x[j]-solution[i].x[j])
+				+F*(solution[a].x[j]-solution[b].x[j]);
+			/*if(solution[i].u[j]<LOW_BOUND[j])
+			  solution[i].u[j] = LOW_BOUND[j];
+			  if(solution[i].u[j]>HIGH_BOUND[j])
+			  solution[i].u[j] = HIGH_BOUND[j];*/
+			solution[i].u[j] = repair_pos(solution[i].u[j],LOW_BOUND[j],HIGH_BOUND[j]);
+		}else
+			solution[i].u[j] = solution[i].x[j];
+	}
+}
+
+//Func Name : DE_work
+//Function  : The main work function for DE
+//Param     : None
+//Autor     : Apollo (Zhihui Zhan)
+//Date      : May 2007
+int DE_work()
+{
+	int i;
+	double value;
+	gen = fes = 0;
+	best_value=0;
+	init();
+	fes_fit[0]+=solution[gbest_index].fitness;
+	double last_best = solution[gbest_index].fitness;
+	stop_fes=fes;
+	int reach_best_fes = FES;
+	fes=0;
+	flag=false;
+	while(1){
+		if(//gen>=GENERATION
+				//	||
+				fes>FES
+		  )
+			break;
+		best_value = solution[gbest_index].fitness;
+
+		for(i=0;i<NP;i++){
+			scheme_rand_1(i);
+		}
+		//	scheme_rand_2(i);
+		//	scheme_best_1(i);
+		//	scheme_best_2(i);
+		//scheme_rand2best_1(i);
+		//#pragma om Pparallel for
+		for(i=0;i<NP;i++)
+		{
+			value = cal_fitness(solution[i].u,DIM);
+			if(value>solution[i].fitness){
+				solution[i].fitness = value;
+				memcpy(solution[i].x,solution[i].u,sizeof(solution[i].x));
+				solution[i].succ=1;
+			}else{
+				solution[i].succ=0;
+			}
+		}
+		//Update the global best index asap can improve the performance
+		for (i=0;i<NP;i++){
+			if(solution[i].fitness>best_value){
+				gbest_index = i;
+			}
+			best_value = solution[gbest_index].fitness;
+		}
+
+		///////////////////////////////////////////
+		if(best_value>last_best){
+			stop_fes=fes;
+		}
+		last_best = best_value;
+		if(reach_best_fes>fes&&solution[gbest_index].fitness>=ACCEPT){
+			reach_best_fes = fes;
+			finish_time = clock();
+			flag=true;
+		}
+		printf("%d:\t%g\n",gen,solution[gbest_index].fitness);
+		//	gen_fit[gen]+=best_value;
+		gen++;
+	}
+	//	printf("%g\n",solution[gbest_index].fitness);
+	return reach_best_fes;
+}
+
+int main(){
+	int i,t;
+	srand(time(NULL));
+	readfile();
+	slu = fopen("slution-de.txt","w");
+	var = fopen("var-de.txt","w");
+	memset(fes_fit,0,sizeof(fes_fit));
+
+	char filename[300];
+	for (t=0;t<TIMES;t++)
+	{
+		printf("Time=%5d\n", t+1);
+		//	fprintf(output_ga1, "\nTime=%5d", t);
+		start_time=clock();
+		DE_work();
+		//finish_time=clock();
+		if (flag)
+			finishTime[t]=(finish_time-start_time)/(double)CLOCKS_PER_SEC;
+		else
+			finishTime[t]=0;
+		//////////////////////////////////////////////
+		sprintf(filename,"pro-%d.txt",t+1);
+		pro = fopen(filename,"w");
+		for(i=0;i<FES;i++){
+			fprintf(pro,"%d\t%g\n",i+1,single_time_fit[i]);
+		}
+		fclose(pro);
+		//////////////////////////////////////////////
+		solu[t] = solution[gbest_index].fitness;
+		printf("%d\t%g\t%g\n",t+1,solu[t],finishTime[t]);
+		fprintf(slu,"%d\t%g\t%g\n",t+1,solu[t],finishTime[t]);
+		fprintf (var,"The result of trial #%d\n",t+1);
+		for (i = 0; i < DIM; i++)
+		{
+			//	fprintf (var,"var(%d) = %6.9f\n",i,solution[gbest_index].x[i]);
+			fprintf (var,"var(%d) = %g\n",i,solution[gbest_index].x[i]);
+		}
+		fprintf(var,"Best fitness = %g\n",solution[gbest_index].fitness);
+		fprintf(var,"Total time = %g\n\n",finishTime[t]);
+	}
+	double max,min,mean,dev;
+	max=min = mean=dev=solu[0];
+	for(t=1;t<TIMES;t++){
+		if(max<solu[t]) max = solu[t];
+		if(min>solu[t]) min = solu[t];
+		mean+=solu[t];
+	}
+	mean /=TIMES;
+	dev = 0;
+	for(t=0;t<TIMES;t++){
+		dev+= (solu[t]-mean)*(solu[t]-mean);
+	}
+	if(TIMES>1)
+		dev=sqrt(dev/(TIMES-1));
+	fprintf(slu,"%g\t%g\t%g\t%g\n",mean,dev,max,min);
+	printf("%g\t%g\t%g\t%g\n",mean,dev,max,min);
+	fclose(slu); fclose(var);
+	pro = fopen("process-de.txt","w");
+	for(t=0;t<FES;t++){
+		fprintf(pro,"%d\t%g\n",t+1,fes_fit[t]/TIMES);
+	}
+	fclose(pro);
+	printf("Success\n");
+	return 0;
+}
+
+//Question:
+/*
+   single_time_fit is the same as fes_fit.
+
+
+ */

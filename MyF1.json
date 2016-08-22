@@ -1,0 +1,17 @@
+{
+		"Name":"DE_for_PEC",
+		"F":0.5,
+		"CR":0.9,
+		"MaxFEs":100000,
+		"NumDim":2,
+		"PopSize":50,
+		"Times":30,
+		"Range":[
+			[-10,10],
+			[-10,10]
+				],
+		"AuthorInfo":{
+			"Author":"Eric Lin",
+			"Email":"463222898@qq.com"
+		}
+}

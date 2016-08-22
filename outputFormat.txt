@@ -1,0 +1,23 @@
+MaxRuns=30
+PopSize=50
+NumDim=2
+NumOfProcesses MaxFEs  Function Run 
+10,50,100,200  1000000    F0,PEC.  1,2,3...30
+
+Save data:
+0.ID.txt
+Format:
+0
+1
+2
+3
+1.Run-configuration-[ID].txt 
+Format:
+ID,(FunctionName,Run,NumOfProcesses),MaxFEs,MaxRun,PopSize,NumDim,F-parameter,CR-parameter,Range,state(start/end),UsedTimes,err.
+
+2.Data-[ID].txt
+Format:
+List<g,F>
+
+1.Test Parallel DE with F0
+2.Test with PEC.
